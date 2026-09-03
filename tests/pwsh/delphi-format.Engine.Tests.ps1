@@ -144,4 +144,31 @@ Describe 'delphi-format.ps1 engine discovery and dispatch' {
             $a | Should -Not -Match '(?m)^-profile$'
         }
     }
+
+    Context 'engine-exclusive key validation' {
+
+        It 'warns when a radFormatter-only key is set but engine is formatter, and still succeeds' {
+            $ws = New-Workspace
+            $warnings = & $script:ToolPath -RootPath $ws -EnginePath $script:MockEngine `
+                -Engine formatter -Profile Embarcadero -OutputLevel quiet 3>&1
+            $LASTEXITCODE | Should -Be 0
+            ($warnings | Out-String) | Should -Match "Config key 'profile' applies only to the 'radFormatter' engine"
+        }
+
+        It 'does not warn when the key matches the selected engine' {
+            $ws = New-Workspace
+            $warnings = @(& $script:ToolPath -RootPath $ws -EnginePath $script:MockEngine `
+                -Engine radFormatter -Profile Embarcadero -OutputLevel quiet 3>&1 |
+                Where-Object { $_ -is [System.Management.Automation.WarningRecord] })
+            $warnings.Count | Should -Be 0
+        }
+
+        It 'suppresses the warning under -Json' {
+            $ws = New-Workspace
+            $warnings = @(& $script:ToolPath -RootPath $ws -EnginePath $script:MockEngine `
+                -Engine formatter -Profile Embarcadero -Json 3>&1 |
+                Where-Object { $_ -is [System.Management.Automation.WarningRecord] })
+            $warnings.Count | Should -Be 0
+        }
+    }
 }

@@ -114,6 +114,7 @@ Acceptance criteria:
 ---
 Title: Validate engine-specific config keys against the selected engine
 Issue: #3
+Status: closed
 Labels: enhancement
 Body:
 The original plan (`delphi-format.md` lines 485-487) calls for runtime

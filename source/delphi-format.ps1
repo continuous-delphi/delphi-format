@@ -132,7 +132,7 @@ $ExitDirty          = 1   # -Check found files needing formatting
 $ExitPartialFailure = 2   # some files failed to format
 $ExitFatal          = 3   # engine not found, bad root, unhandled error
 
-$script:ToolVersion = '0.6.4'
+$script:ToolVersion = '0.6.5'
 
 # =============================================================================
 # Version info
@@ -367,6 +367,46 @@ function Resolve-EffectiveConfig([string]$Root, [string]$ExplicitConfigFile) {
     }
 
     return $config
+}
+
+function Get-EngineExclusiveKey {
+    <#
+    .SYNOPSIS
+        Table of orchestration config keys that apply to only ONE engine, mapped
+        to the engine that supports each. Register new engine-exclusive keys here
+        and both -ShowConfig-style resolution and Assert-EngineConfigKey pick them
+        up automatically.
+    #>
+    return @{
+        'profile' = 'radFormatter'
+    }
+}
+
+function Assert-EngineConfigKey {
+    <#
+    .SYNOPSIS
+        Warns (non-fatally) when an engine-exclusive config key is set but a
+        different engine is selected, so the key is silently ignored. The run
+        continues regardless. Warnings are suppressed under -Json so machine
+        output is never disturbed.
+    #>
+    param(
+        [object]$Config,
+        [string]$EngineName,
+        [bool]$Suppress
+    )
+
+    if ($Suppress) { return }
+
+    $exclusive = Get-EngineExclusiveKey
+    foreach ($key in $exclusive.Keys) {
+        $owner = $exclusive[$key]
+        if ($EngineName -eq $owner) { continue }
+        $value = Get-ConfigValue $Config $key
+        if (-not [string]::IsNullOrEmpty([string]$value)) {
+            Write-Warning "Config key '$key' applies only to the '$owner' engine and is ignored for engine '$EngineName'."
+        }
+    }
 }
 
 # =============================================================================
@@ -877,6 +917,10 @@ try {
     $resolvedTimeout        = (Get-ConfigValue $effectiveConfig 'timeoutSeconds')   ; if ($null -eq $resolvedTimeout)        { $resolvedTimeout = $TimeoutSeconds }
     $configIncludePatterns  = (Get-ConfigValue $effectiveConfig 'includeFilePattern')
     $configExcludePatterns  = (Get-ConfigValue $effectiveConfig 'excludeDirectoryPattern')
+
+    # Warn about engine-exclusive config keys set for the wrong engine (runs after
+    # CLI overrides, so it reflects the truly effective engine). Non-fatal.
+    Assert-EngineConfigKey -Config $effectiveConfig -EngineName $resolvedEngine -Suppress $script:SuppressOutput
 
     # Merge CLI patterns with config patterns
     $mergedInclude = @()

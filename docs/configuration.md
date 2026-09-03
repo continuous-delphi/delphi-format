@@ -53,6 +53,26 @@ All keys are optional. Unrecognized keys are ignored.
 | `searchParentFolders` | bool | Enable upward traversal for monorepo support |
 | `timeoutSeconds` | int | Per-engine-invocation timeout |
 
+## Engine-Specific Keys
+
+Some config keys apply to only one engine. Currently:
+
+| Key | Applies to |
+|-----|------------|
+| `profile` | `radFormatter` only |
+
+If such a key is set (via config file or CLI) while a different engine is
+selected, delphi-format emits a non-fatal warning naming the key and the owning
+engine, then continues -- the key is simply ignored for the active engine. For
+example, `profile` set with `engine: formatter` prints:
+
+```
+WARNING: Config key 'profile' applies only to the 'radFormatter' engine and is ignored for engine 'formatter'.
+```
+
+The warning is written to the PowerShell warning stream and is suppressed under
+`-Json`, so it never disturbs machine-readable output.
+
 ## Merge Rules
 
 | Type | Behavior |

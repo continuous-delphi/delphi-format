@@ -8,6 +8,14 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## v0.6.4
+- Warn (non-fatally) when an engine-exclusive config key is set for a different
+  engine and would be silently ignored -- e.g. `profile` with `engine: formatter`.
+  The check is table-driven and the warning is suppressed under `-Json`.
+[#3](https://github.com/continuous-delphi/delphi-format/issues/3)
+
+---
+
 ## v0.6.3
 - Add `-Profile` parameter and `profile` config key to select radFormatter's
   base config profile (`Default`, `FormatterExe`, `Embarcadero`, `NoOp`),
