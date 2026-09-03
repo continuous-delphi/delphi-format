@@ -130,7 +130,7 @@ $ExitDirty          = 1   # -Check found files needing formatting
 $ExitPartialFailure = 2   # some files failed to format
 $ExitFatal          = 3   # engine not found, bad root, unhandled error
 
-$script:Version = '0.5.2'
+$script:ToolVersion = '0.5.2'
 
 # =============================================================================
 # Version info
@@ -142,14 +142,14 @@ if ($Version) {
         command = 'version'
         tool    = @{
             name    = 'delphi-format'
-            version = $script:Version
+            version = $script:ToolVersion
         }
     }
     if ($Format -eq 'json') {
         Write-Output ($info | ConvertTo-Json -Depth 5 -Compress)
     }
     else {
-        Write-Output "delphi-format $($script:Version)"
+        Write-Output "delphi-format $($script:ToolVersion)"
     }
     exit $ExitSuccess
 }
