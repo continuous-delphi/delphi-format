@@ -3,7 +3,7 @@
 # Pattern matches the 3-part version string 
 
 pwsh -NoProfile -Command '
-  $result = Invoke-DelphiIncVer -File "source/delphi-format.ps1" -IncverTarget "Text" -IncverStyle "WinVer" -IncverPart "patch"  -IncverPattern "\`$script:Version\s*=\s*\x27(\d+\.\d+\.\d+)\x27"
+  $result = Invoke-DelphiIncVer -File "source/delphi-format.ps1" -IncverTarget "Text" -IncverStyle "WinVer" -IncverPart "patch"  -IncverPattern "\`$script:ToolVersion\s*=\s*\x27(\d+\.\d+\.\d+)\x27"
   if (-not $result.Success) {
     Write-Error "IncVer failed: $($result.Message)"
     exit 1
