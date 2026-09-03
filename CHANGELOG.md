@@ -8,6 +8,14 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## v0.6.0
+- Implement structured output: `-Json` and `-PassThru` now emit a result
+  object (per-file status, counts, timing) across Execute/Check/WhatIf, and
+  `-OutputFile` writes the flat CI result. `-WhatIf` is now a real preview.
+[#1](https://github.com/continuous-delphi/delphi-format/issues/1)
+
+---
+
 ## [0.5.0] - Unreleased
 
 Initial release of `delphi-format`.

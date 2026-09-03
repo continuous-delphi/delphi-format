@@ -2,3 +2,4 @@
 tests/pwsh/results/*.xml
 *.txt
 *.bat
+*.md

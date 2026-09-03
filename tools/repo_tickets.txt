@@ -4,3 +4,52 @@
 # dev-automation-tooling script & document reference: C:\code\dev-automation-tooling
 
 ---
+Title: Implement JSON / structured output (-Json, -OutputFile, -PassThru)
+Issue: #1
+Status: closed
+Labels: enhancement
+Body:
+The result-output features documented in `docs/json-output.md` are declared but
+not implemented in `source/delphi-format.ps1`. The three parameters exist only
+as no-ops -- each carries a `PSReviewUnusedParameter` `SuppressMessageAttribute`
+because PSScriptAnalyzer flags them as unused:
+
+- `-Json`: currently only sets `$script:SuppressOutput`, silencing the
+  `Write-Detail`/`Write-Summary`/`Write-Section` helpers. It does NOT emit the
+  documented `{ Engine, Root, Mode, FilesScanned, FilesFormatted, ..., Items[] }`
+  object. Net effect today: `-Json` on a format/check/whatif run emits nothing.
+- `-OutputFile <path>`: declared (`delphi-format.ps1:118`) but never written. No
+  structured result file is produced for CI integration.
+- `-PassThru`: declared but never returns objects to the pipeline.
+
+Correctly implemented and NOT in scope here: `-Version -Format json` and
+`-ShowConfig -Json`, which already emit valid JSON.
+
+Design note / blocker to resolve as part of this work: the documented per-file
+`Items[]` array (with per-file `Status` and `DurationMs`) and the
+`FilesFormatted`/`FilesUnchanged`/`FilesFailed` counts cannot be produced by the
+current engine invocation. `Invoke-FormatEngine` runs a single batch
+`Start-Process` over all files and returns one overall exit code, so there is no
+per-file result tracking. Implementation must add per-file result capture (or
+document a reduced shape) rather than emit fields the engine cannot populate.
+
+Downstream dependency: `delphi-powershell-ci`'s `Invoke-DelphiFormat` wrapper is
+documented to parse the `-OutputFile` result (docs/json-output.md), so this
+contract must land before that integration can be completed.
+
+Acceptance criteria:
+- [ ] `-Json` emits the object documented in `docs/json-output.md` for Execute,
+      WhatIf, and Check modes, with all other stdout suppressed.
+- [ ] Per-file `Items[]` and the summary counts are backed by real per-file
+      result tracking (engine invocation refactored as needed), OR the doc and
+      output are reconciled to a shape the tool can actually produce.
+- [ ] `-OutputFile <path>` writes the structured CI result JSON documented in
+      docs/json-output.md.
+- [ ] `-PassThru` returns result objects to the pipeline.
+- [ ] The `PSReviewUnusedParameter` suppressions for `Json`/`PassThru`/`OutputFile`
+      are removed (params are now genuinely consumed) and PSScriptAnalyzer stays
+      clean.
+- [ ] `docs/json-output.md` matches the shipped behavior exactly.
+- [ ] Pester coverage for `-Json`, `-OutputFile`, and `-PassThru` across modes.
+
+---

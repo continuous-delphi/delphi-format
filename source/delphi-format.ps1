@@ -51,10 +51,6 @@ pwsh -File source/delphi-format.ps1 -Version -Format json
   Justification='Write-Host is intentional: standalone CLI tool streams status to the console host.')]
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'OutputLevel',
   Justification='Consumed by Write-Detail/Write-Summary helper functions.')]
-[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'PassThru',
-  Justification='Consumed by tool-specific result reporting logic.')]
-[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'OutputFile',
-  Justification='Consumed by tool-specific result reporting logic.')]
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseDeclaredVarsMoreThanAssignments', 'ExitDirty',
   Justification='Exit code constant used in check mode logic.')]
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', 'Get-DefaultFilePatterns',
@@ -130,7 +126,7 @@ $ExitDirty          = 1   # -Check found files needing formatting
 $ExitPartialFailure = 2   # some files failed to format
 $ExitFatal          = 3   # engine not found, bad root, unhandled error
 
-$script:ToolVersion = '0.5.2'
+$script:ToolVersion = '0.6.0'
 
 # =============================================================================
 # Version info
@@ -482,6 +478,20 @@ function Get-FilesToFormat([string]$Root, [string[]]$ExplicitPaths, [string[]]$I
 # Engine invocation
 # =============================================================================
 
+function ConvertTo-ArgumentString {
+    <#
+    .SYNOPSIS
+        Joins engine arguments into a single command line, quoting any token
+        that contains whitespace so paths with spaces survive Start-Process.
+    #>
+    param([System.Collections.Generic.List[string]]$Arguments)
+
+    $parts = foreach ($a in $Arguments) {
+        if ($a -match '\s') { '"' + $a + '"' } else { $a }
+    }
+    return ($parts -join ' ')
+}
+
 function Invoke-FormatEngine {
     param(
         [string]$EngineBinary,
@@ -493,6 +503,11 @@ function Invoke-FormatEngine {
         [bool]$CheckOnly,
         [int]$Timeout
     )
+
+    # Internal engine calls must run even when the caller passed -WhatIf: the
+    # tool's own branch logic guarantees no source files are modified in
+    # Check/WhatIf mode, so the temp/engine operations here always execute.
+    $WhatIfPreference = $false
 
     $engineArgs = [System.Collections.Generic.List[string]]::new()
 
@@ -517,27 +532,39 @@ function Invoke-FormatEngine {
 
     foreach ($f in $SourceFiles) { $engineArgs.Add($f) }
 
-    $argsString = $engineArgs -join ' '
+    $argsString = ConvertTo-ArgumentString $engineArgs
     Write-Verbose "Engine: $EngineBinary"
     Write-Verbose "Args: $argsString"
 
-    $proc = Start-Process -FilePath $EngineBinary `
-        -ArgumentList $argsString `
-        -NoNewWindow -PassThru -Wait:$false
-    $exited = $proc.WaitForExit($Timeout * 1000)
-    if (-not $exited) {
-        try { $proc.Kill() } catch { Write-Verbose "Process already exited: $_" }
+    $outFile = [System.IO.Path]::GetTempFileName()
+    $errFile = [System.IO.Path]::GetTempFileName()
+    try {
+        $proc = Start-Process -FilePath $EngineBinary `
+            -ArgumentList $argsString `
+            -NoNewWindow -PassThru -Wait:$false `
+            -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+        $exited = $proc.WaitForExit($Timeout * 1000)
+        if (-not $exited) {
+            try { $proc.Kill() } catch { Write-Verbose "Process already exited: $_" }
+            return @{
+                Success  = $false
+                ExitCode = -1
+                StdOut   = ''
+                Message  = "Formatting engine timed out after ${Timeout}s"
+            }
+        }
+
+        $stdout = if (Test-Path -LiteralPath $outFile) { Get-Content -LiteralPath $outFile -Raw -ErrorAction SilentlyContinue } else { '' }
+
         return @{
-            Success  = $false
-            ExitCode = -1
-            Message  = "Formatting engine timed out after ${Timeout}s"
+            Success  = ($proc.ExitCode -eq 0)
+            ExitCode = $proc.ExitCode
+            StdOut   = $stdout
+            Message  = if ($proc.ExitCode -eq 0) { 'Formatting completed' } else { "Engine exited with code $($proc.ExitCode)" }
         }
     }
-
-    return @{
-        Success  = ($proc.ExitCode -eq 0)
-        ExitCode = $proc.ExitCode
-        Message  = if ($proc.ExitCode -eq 0) { 'Formatting completed' } else { "Engine exited with code $($proc.ExitCode)" }
+    finally {
+        Remove-Item -LiteralPath $outFile, $errFile -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -554,6 +581,9 @@ function Invoke-FormatterCheck {
         [string]$FileEncoding,
         [int]$Timeout
     )
+
+    # See Invoke-FormatEngine: temp copy/format/diff must run under -WhatIf too.
+    $WhatIfPreference = $false
 
     $dirty = [System.Collections.Generic.List[string]]::new()
     $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "delphi-format-check-$([guid]::NewGuid().ToString('N'))"
@@ -577,7 +607,7 @@ function Invoke-FormatterCheck {
             $engineArgs.Add($tempFile)
 
             $proc = Start-Process -FilePath $EngineBinary `
-                -ArgumentList ($engineArgs -join ' ') `
+                -ArgumentList (ConvertTo-ArgumentString $engineArgs) `
                 -NoNewWindow -PassThru -Wait:$false
             $exited = $proc.WaitForExit($Timeout * 1000)
             if (-not $exited) {
@@ -603,6 +633,163 @@ function Invoke-FormatterCheck {
         ExitCode = if ($dirty.Count -eq 0) { 0 } else { 1 }
         Message  = if ($dirty.Count -eq 0) { 'All files are correctly formatted' } else { "$($dirty.Count) file(s) need formatting" }
     }
+}
+
+function Get-DirtyResult {
+    <#
+    .SYNOPSIS
+        Engine-agnostic detection of files needing formatting, without modifying
+        anything. Used by both -Check and -WhatIf. radFormatter uses its native
+        -check flag (parsing "would format:" lines); formatter.exe uses the
+        copy-to-temp-and-diff strategy in Invoke-FormatterCheck.
+    #>
+    param(
+        [string]$EngineBinary,
+        [string]$EngineName,
+        [string[]]$SourceFiles,
+        [string]$FormatEngineConfigFile,
+        [string]$FileEncoding,
+        [int]$Timeout
+    )
+
+    if ($EngineName -eq 'radFormatter') {
+        $r = Invoke-FormatEngine -EngineBinary $EngineBinary -EngineName $EngineName `
+            -SourceFiles $SourceFiles -FormatEngineConfigFile $FormatEngineConfigFile `
+            -BackupsEnabled $false -FileEncoding $FileEncoding -CheckOnly $true -Timeout $Timeout
+
+        # Exit 0 = clean, 1 = dirty. Anything else (or -1 timeout) is a real error.
+        if ($r.ExitCode -eq -1 -or $r.ExitCode -gt 1) {
+            return @{ Dirty = @(); Failed = $true; Message = $r.Message }
+        }
+
+        $dirty = [System.Collections.Generic.List[string]]::new()
+        foreach ($line in ($r.StdOut -split "`r?`n")) {
+            $m = [regex]::Match($line, '^\s*would format:\s*(.+?)\s*$')
+            if ($m.Success) { $dirty.Add($m.Groups[1].Value) }
+        }
+        return @{ Dirty = $dirty.ToArray(); Failed = $false; Message = "$($dirty.Count) file(s) need formatting" }
+    }
+
+    $fc = Invoke-FormatterCheck -EngineBinary $EngineBinary -SourceFiles $SourceFiles `
+        -FormatEngineConfigFile $FormatEngineConfigFile -FileEncoding $FileEncoding -Timeout $Timeout
+    return @{ Dirty = $fc.Dirty; Failed = $false; Message = $fc.Message }
+}
+
+# =============================================================================
+# Result assembly and output
+# =============================================================================
+
+function Get-ContentSnapshot {
+    <#
+    .SYNOPSIS
+        Returns a hashtable mapping each file path to a SHA256 hash of its
+        content, used to detect which files an in-place format run changed.
+    #>
+    param([string[]]$Files)
+
+    $map = @{}
+    foreach ($f in $Files) {
+        if (Test-Path -LiteralPath $f -PathType Leaf) {
+            try { $map[$f] = (Get-FileHash -LiteralPath $f -Algorithm SHA256 -ErrorAction Stop).Hash }
+            catch { $map[$f] = '' }
+        }
+        else {
+            $map[$f] = ''
+        }
+    }
+    return $map
+}
+
+function Get-FormatResult {
+    <#
+    .SYNOPSIS
+        Builds the rich result object emitted by -Json and -PassThru. Summary
+        counts are derived from per-file Item statuses: would-format counts as
+        "formatted" (files that were / would be changed).
+    #>
+    param(
+        [string]$EngineName,
+        [string]$Root,
+        [string]$Mode,
+        [string[]]$IncludePatterns,
+        [string[]]$ExcludePatterns,
+        [object[]]$Items,
+        [double]$DurationMs
+    )
+
+    $formatted = @($Items | Where-Object { $_.Status -in @('formatted', 'would-format') }).Count
+    $unchanged = @($Items | Where-Object { $_.Status -eq 'unchanged' }).Count
+    $failed    = @($Items | Where-Object { $_.Status -eq 'failed' }).Count
+
+    return [PSCustomObject]@{
+        Engine                  = $EngineName
+        Root                    = ($Root -replace '\\', '/')
+        Mode                    = $Mode
+        IncludeFilePattern      = @($IncludePatterns)
+        ExcludeDirectoryPattern = @($ExcludePatterns)
+        FilesScanned            = @($Items).Count
+        FilesFormatted          = $formatted
+        FilesUnchanged          = $unchanged
+        FilesFailed             = $failed
+        DurationMs              = [math]::Round($DurationMs, 0)
+        Items                   = @($Items)
+    }
+}
+
+function Get-CiResult {
+    <#
+    .SYNOPSIS
+        Builds the flat CI-integration object written to -OutputFile.
+    #>
+    param(
+        [string]$EngineName,
+        [string]$Root,
+        [bool]$Success,
+        [int]$ExitCode,
+        [int]$Scanned,
+        [int]$Formatted,
+        [int]$Unchanged,
+        [int]$Failed,
+        [double]$DurationMs
+    )
+
+    return [PSCustomObject]@{
+        engine         = $EngineName
+        root           = ($Root -replace '\\', '/')
+        success        = $Success
+        exitCode       = $ExitCode
+        filesScanned   = $Scanned
+        filesFormatted = $Formatted
+        filesUnchanged = $Unchanged
+        filesFailed    = $Failed
+        duration       = [math]::Round($DurationMs / 1000, 2)
+    }
+}
+
+function Complete-Run {
+    <#
+    .SYNOPSIS
+        Emits machine-readable output (-Json / -OutputFile / -PassThru) and
+        exits with the given code. Text output is produced by the caller and is
+        already suppressed under -Json via $script:SuppressOutput.
+    #>
+    param(
+        [object]$ResultObject,
+        [object]$CiObject,
+        [int]$ExitCode
+    )
+
+    if ($Json) {
+        Write-Output ($ResultObject | ConvertTo-Json -Depth 6)
+    }
+    if (-not [string]::IsNullOrEmpty($OutputFile)) {
+        $ciJson = $CiObject | ConvertTo-Json -Depth 6
+        Set-Content -LiteralPath $OutputFile -Value $ciJson -Encoding UTF8
+    }
+    if ($PassThru -and -not $Json) {
+        Write-Output $ResultObject
+    }
+    exit $ExitCode
 }
 
 # =============================================================================
@@ -686,65 +873,121 @@ try {
 
     Write-Section "delphi-format -- $resolvedEngine"
 
+    # Effective pattern lists for reporting (defaults + built-in exclusions merged in)
+    $effectiveInclude = @(Get-DefaultFilePatterns)
+    if ($mergedInclude.Count -gt 0) { $effectiveInclude += $mergedInclude }
+    $effectiveInclude = @($effectiveInclude | Select-Object -Unique)
+    $effectiveExclude = @('.git', '.vs', '.claude') + $mergedExclude
+    $effectiveExclude = @($effectiveExclude | Select-Object -Unique)
+
+    $modeLabel = if ($Check) { 'Check (no changes)' } elseif ($WhatIfPreference) { 'WhatIf (no changes)' } else { 'Execute' }
+
     # Scan for files
-    $filesToFormat = Get-FilesToFormat -Root $root -ExplicitPaths $Path -IncludePatterns $mergedInclude -ExcludePatterns $mergedExclude
+    $filesToFormat = @(Get-FilesToFormat -Root $root -ExplicitPaths $Path -IncludePatterns $mergedInclude -ExcludePatterns $mergedExclude)
     Write-Detail "Found $($filesToFormat.Count) source file(s)"
 
     if ($filesToFormat.Count -eq 0) {
         Write-Summary "No source files found to format."
         $sw.Stop()
-        exit $ExitSuccess
+        $emptyResult = Get-FormatResult -EngineName $resolvedEngine -Root $root -Mode $modeLabel `
+            -IncludePatterns $effectiveInclude -ExcludePatterns $effectiveExclude -Items @() -DurationMs $sw.Elapsed.TotalMilliseconds
+        $emptyCi = Get-CiResult -EngineName $resolvedEngine -Root $root -Success $true -ExitCode $ExitSuccess `
+            -Scanned 0 -Formatted 0 -Unchanged 0 -Failed 0 -DurationMs $sw.Elapsed.TotalMilliseconds
+        Complete-Run -ResultObject $emptyResult -CiObject $emptyCi -ExitCode $ExitSuccess
     }
 
-    # Execute
-    if ($Check) {
-        if ($resolvedEngine -eq 'radFormatter') {
-            $result = Invoke-FormatEngine -EngineBinary $engineBinary -EngineName $resolvedEngine `
-                -SourceFiles $filesToFormat -FormatEngineConfigFile $resolvedEngineConfig `
-                -BackupsEnabled $false -FileEncoding $resolvedEncoding `
-                -CheckOnly $true -Timeout $resolvedTimeout
-        }
-        else {
-            $result = Invoke-FormatterCheck -EngineBinary $engineBinary `
-                -SourceFiles $filesToFormat -FormatEngineConfigFile $resolvedEngineConfig `
-                -FileEncoding $resolvedEncoding -Timeout $resolvedTimeout
-        }
-
-        $sw.Stop()
-        Write-SummarySection $result.Message
-        Write-Summary "Completed in $(Format-Duration $sw.Elapsed.TotalMilliseconds)"
-        exit $result.ExitCode
-    }
-
-    if ($PSCmdlet.ShouldProcess("$($filesToFormat.Count) file(s)", "Format")) {
-        $result = Invoke-FormatEngine -EngineBinary $engineBinary -EngineName $resolvedEngine `
+    # -Check / -WhatIf: detect files needing formatting without modifying anything
+    if ($Check -or $WhatIfPreference) {
+        $dirtyResult = Get-DirtyResult -EngineBinary $engineBinary -EngineName $resolvedEngine `
             -SourceFiles $filesToFormat -FormatEngineConfigFile $resolvedEngineConfig `
-            -BackupsEnabled $resolvedBackups -FileEncoding $resolvedEncoding `
-            -CheckOnly $false -Timeout $resolvedTimeout
+            -FileEncoding $resolvedEncoding -Timeout $resolvedTimeout
 
         $sw.Stop()
 
-        if ($result.Success) {
-            Write-SummarySection $result.Message
-        }
-        else {
-            Write-Host ""
-            Write-Host "ERROR: $($result.Message)" -ForegroundColor Red
+        if ($dirtyResult.Failed) {
+            $items = @(foreach ($f in $filesToFormat) {
+                [PSCustomObject]@{ Path = (Get-RelativePathCompat $root $f) -replace '\\', '/'; Status = 'failed' }
+            })
+            if (-not $script:SuppressOutput) { Write-Host ""; Write-Host "ERROR: $($dirtyResult.Message)" -ForegroundColor Red }
+            $result = Get-FormatResult -EngineName $resolvedEngine -Root $root -Mode $modeLabel `
+                -IncludePatterns $effectiveInclude -ExcludePatterns $effectiveExclude -Items $items -DurationMs $sw.Elapsed.TotalMilliseconds
+            $ci = Get-CiResult -EngineName $resolvedEngine -Root $root -Success $false -ExitCode $ExitPartialFailure `
+                -Scanned $result.FilesScanned -Formatted 0 -Unchanged 0 -Failed $result.FilesFailed -DurationMs $sw.Elapsed.TotalMilliseconds
+            Complete-Run -ResultObject $result -CiObject $ci -ExitCode $ExitPartialFailure
         }
 
+        $dirtySet = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        foreach ($d in $dirtyResult.Dirty) { [void]$dirtySet.Add(($d -replace '\\', '/')) }
+
+        $items = @(foreach ($f in $filesToFormat) {
+            $status = if ($dirtySet.Contains(($f -replace '\\', '/'))) { 'would-format' } else { 'unchanged' }
+            [PSCustomObject]@{ Path = (Get-RelativePathCompat $root $f) -replace '\\', '/'; Status = $status }
+        })
+
+        $dirtyCount = @($items | Where-Object { $_.Status -eq 'would-format' }).Count
+        $exitCode   = if ($Check -and $dirtyCount -gt 0) { $ExitDirty } else { $ExitSuccess }
+        $msg        = if ($dirtyCount -gt 0) { "$dirtyCount file(s) need formatting" } else { 'All files are correctly formatted' }
+
+        Write-SummarySection $msg
         Write-Summary "Completed in $(Format-Duration $sw.Elapsed.TotalMilliseconds)"
 
-        if (-not $result.Success) {
-            exit $ExitPartialFailure
-        }
-        exit $ExitSuccess
+        $result = Get-FormatResult -EngineName $resolvedEngine -Root $root -Mode $modeLabel `
+            -IncludePatterns $effectiveInclude -ExcludePatterns $effectiveExclude -Items $items -DurationMs $sw.Elapsed.TotalMilliseconds
+        $ci = Get-CiResult -EngineName $resolvedEngine -Root $root -Success ($exitCode -eq $ExitSuccess) -ExitCode $exitCode `
+            -Scanned $result.FilesScanned -Formatted $result.FilesFormatted -Unchanged $result.FilesUnchanged -Failed $result.FilesFailed -DurationMs $sw.Elapsed.TotalMilliseconds
+        Complete-Run -ResultObject $result -CiObject $ci -ExitCode $exitCode
     }
 
-    # WhatIf path
+    # -Confirm declined (WhatIf is handled above); nothing is modified
+    if (-not $PSCmdlet.ShouldProcess("$($filesToFormat.Count) file(s)", 'Format')) {
+        $sw.Stop()
+        $items = @(foreach ($f in $filesToFormat) {
+            [PSCustomObject]@{ Path = (Get-RelativePathCompat $root $f) -replace '\\', '/'; Status = 'unchanged' }
+        })
+        Write-Summary "No files modified."
+        Write-Summary "Completed in $(Format-Duration $sw.Elapsed.TotalMilliseconds)"
+        $result = Get-FormatResult -EngineName $resolvedEngine -Root $root -Mode 'Execute' `
+            -IncludePatterns $effectiveInclude -ExcludePatterns $effectiveExclude -Items $items -DurationMs $sw.Elapsed.TotalMilliseconds
+        $ci = Get-CiResult -EngineName $resolvedEngine -Root $root -Success $true -ExitCode $ExitSuccess `
+            -Scanned $result.FilesScanned -Formatted 0 -Unchanged $result.FilesUnchanged -Failed 0 -DurationMs $sw.Elapsed.TotalMilliseconds
+        Complete-Run -ResultObject $result -CiObject $ci -ExitCode $ExitSuccess
+    }
+
+    # Execute: format in place, tracking per-file change via content hash
+    $before = Get-ContentSnapshot $filesToFormat
+
+    $runResult = Invoke-FormatEngine -EngineBinary $engineBinary -EngineName $resolvedEngine `
+        -SourceFiles $filesToFormat -FormatEngineConfigFile $resolvedEngineConfig `
+        -BackupsEnabled $resolvedBackups -FileEncoding $resolvedEncoding `
+        -CheckOnly $false -Timeout $resolvedTimeout
+
     $sw.Stop()
-    Write-Summary "Would format $($filesToFormat.Count) file(s)"
+
+    if ($runResult.Success) {
+        $after = Get-ContentSnapshot $filesToFormat
+        $items = @(foreach ($f in $filesToFormat) {
+            $status = if ($before[$f] -ne $after[$f]) { 'formatted' } else { 'unchanged' }
+            [PSCustomObject]@{ Path = (Get-RelativePathCompat $root $f) -replace '\\', '/'; Status = $status }
+        })
+        $result = Get-FormatResult -EngineName $resolvedEngine -Root $root -Mode 'Execute' `
+            -IncludePatterns $effectiveInclude -ExcludePatterns $effectiveExclude -Items $items -DurationMs $sw.Elapsed.TotalMilliseconds
+        Write-SummarySection "$($result.FilesFormatted) formatted, $($result.FilesUnchanged) unchanged"
+        Write-Summary "Completed in $(Format-Duration $sw.Elapsed.TotalMilliseconds)"
+        $ci = Get-CiResult -EngineName $resolvedEngine -Root $root -Success $true -ExitCode $ExitSuccess `
+            -Scanned $result.FilesScanned -Formatted $result.FilesFormatted -Unchanged $result.FilesUnchanged -Failed 0 -DurationMs $sw.Elapsed.TotalMilliseconds
+        Complete-Run -ResultObject $result -CiObject $ci -ExitCode $ExitSuccess
+    }
+
+    $items = @(foreach ($f in $filesToFormat) {
+        [PSCustomObject]@{ Path = (Get-RelativePathCompat $root $f) -replace '\\', '/'; Status = 'failed' }
+    })
+    if (-not $script:SuppressOutput) { Write-Host ""; Write-Host "ERROR: $($runResult.Message)" -ForegroundColor Red }
     Write-Summary "Completed in $(Format-Duration $sw.Elapsed.TotalMilliseconds)"
-    exit $ExitSuccess
+    $result = Get-FormatResult -EngineName $resolvedEngine -Root $root -Mode 'Execute' `
+        -IncludePatterns $effectiveInclude -ExcludePatterns $effectiveExclude -Items $items -DurationMs $sw.Elapsed.TotalMilliseconds
+    $ci = Get-CiResult -EngineName $resolvedEngine -Root $root -Success $false -ExitCode $ExitPartialFailure `
+        -Scanned $result.FilesScanned -Formatted 0 -Unchanged 0 -Failed $result.FilesFailed -DurationMs $sw.Elapsed.TotalMilliseconds
+    Complete-Run -ResultObject $result -CiObject $ci -ExitCode $ExitPartialFailure
 
 }
 catch {
