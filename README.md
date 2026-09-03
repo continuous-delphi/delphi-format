@@ -148,6 +148,42 @@ pwsh -File source/delphi-format.ps1 -ShowConfig -Json
 pwsh -File source/delphi-format.ps1 -Version -Format json
 ```
 
+### CI Gate (check mode)
+
+`-Check` is audit-only: it never modifies source, and exits `1` if any file
+would be reformatted. Wire it into a pipeline as a gate that fails the build
+when code is not formatted.
+
+```powershell
+# Fail the build if any tracked file needs formatting (quiet for clean logs)
+pwsh -File source/delphi-format.ps1 -Check -OutputLevel quiet
+
+# Gate a specific engine + shared rules config
+pwsh -File source/delphi-format.ps1 -Engine radFormatter -EngineConfigFile radFormatter.json -Check
+
+# Emit a machine-readable audit report for the CI system to archive
+pwsh -File source/delphi-format.ps1 -Check -Json -OutputFile format-report.json
+```
+
+The exit code drives the gate -- `0` means clean, `1` means files need
+formatting (fail the job), `2`/`3` mean the run itself failed. Most CI runners
+fail the step automatically on a non-zero exit, but you can branch on it
+explicitly:
+
+```powershell
+# PowerShell CI step
+pwsh -File source/delphi-format.ps1 -Check -OutputLevel quiet
+if ($LASTEXITCODE -eq 1) { throw 'Delphi sources are not formatted -- run delphi-format locally and commit.' }
+if ($LASTEXITCODE -ge 2) { throw "delphi-format failed (exit $LASTEXITCODE)." }
+```
+
+```yaml
+# GitHub Actions step
+- name: Check Delphi formatting
+  shell: pwsh
+  run: pwsh -File source/delphi-format.ps1 -Check -OutputLevel quiet
+```
+
 ---
 
 ## Running Tests
