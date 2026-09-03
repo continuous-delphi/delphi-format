@@ -8,6 +8,13 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## v0.6.5
+- Add `docs/engine-cli-reference.md` documenting the `formatter.exe` and
+  `radFormatter` CLI surfaces and how delphi-format maps its parameters to each.
+  Salvaged from the retired design plan.
+
+---
+
 ## v0.6.4
 - Warn (non-fatally) when an engine-exclusive config key is set for a different
   engine and would be silently ignored -- e.g. `profile` with `engine: formatter`.
