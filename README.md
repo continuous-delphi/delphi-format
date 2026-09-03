@@ -35,7 +35,7 @@ pwsh -File source/delphi-format.ps1 -WhatIf
 | Engine | Binary | Notes |
 |--------|--------|-------|
 | `formatter` (default) | `formatter.exe` | RAD Studio built-in. Removed in Delphi 13. |
-| `radFormatter` | `radFormatter.exe` | Continuous-Delphi formatter with native `-check` support. |
+| `radFormatter` | `radFormatter.exe` | RAD Programmer formatter with native `-check` support. |
 
 ---
 

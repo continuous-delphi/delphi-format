@@ -132,7 +132,7 @@ $ExitDirty          = 1   # -Check found files needing formatting
 $ExitPartialFailure = 2   # some files failed to format
 $ExitFatal          = 3   # engine not found, bad root, unhandled error
 
-$script:ToolVersion = '0.6.7'
+$script:ToolVersion = '0.6.8'
 
 # =============================================================================
 # Version info
