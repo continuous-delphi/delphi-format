@@ -168,6 +168,29 @@ Describe 'delphi-format.ps1 configuration' {
         }
     }
 
+    Context 'profile config key' {
+
+        It 'surfaces the profile config key in the effective config' {
+            $ws = New-Dir (Join-Path $TestDrive ([guid]::NewGuid().ToString('N')))
+            Set-Content -LiteralPath (Join-Path $ws 'delphi-format.json') -Value '{ "profile": "Embarcadero" }'
+            $cfg = Get-EffectiveConfig -Root $ws
+            (Get-Val $cfg 'profile') | Should -Be 'Embarcadero'
+        }
+
+        It 'lets CLI -Profile override the config profile' {
+            $ws = New-Dir (Join-Path $TestDrive ([guid]::NewGuid().ToString('N')))
+            Set-Content -LiteralPath (Join-Path $ws 'delphi-format.json') -Value '{ "profile": "Embarcadero" }'
+            $env:DELPHI_FORMAT_HOME_OVERRIDE = (New-Dir (Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))))
+            try {
+                $cfg = & $script:ToolPath -ShowConfig -Json -RootPath $ws -Profile NoOp | ConvertFrom-Json
+                (Get-Val $cfg 'profile') | Should -Be 'NoOp'
+            }
+            finally {
+                Remove-Item Env:DELPHI_FORMAT_HOME_OVERRIDE -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
     Context '-ShowConfig text output' {
 
         It 'exits 0 and prints the resolved root' {

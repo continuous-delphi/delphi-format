@@ -155,6 +155,7 @@ Acceptance criteria:
 ---
 Title: Expose radFormatter -profile as a first-class parameter and config key
 Issue: #4
+Status: closed
 Labels: enhancement
 Body:
 radFormatter supports a `-profile <name>` flag selecting a base config profile

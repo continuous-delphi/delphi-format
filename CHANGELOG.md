@@ -8,6 +8,15 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## v0.6.3
+- Add `-Profile` parameter and `profile` config key to select radFormatter's
+  base config profile (`Default`, `FormatterExe`, `Embarcadero`, `NoOp`),
+  forwarded to radFormatter via `-profile` in both format and check runs. It is
+  radFormatter-only and never passed to `formatter.exe`.
+[#4](https://github.com/continuous-delphi/delphi-format/issues/4)
+
+---
+
 ## v0.6.2
 - Add the Config, Engine, and Integration Pester suites plus a `tests/pwsh/fixtures/`
   mock engine (formatter/radFormatter simulation), config fixtures, and sample

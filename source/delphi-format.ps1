@@ -55,6 +55,8 @@ pwsh -File source/delphi-format.ps1 -Version -Format json
   Justification='Exit code constant used in check mode logic.')]
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', 'Get-DefaultFilePatterns',
   Justification='Patterns is conventional for a collection of glob patterns.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidAssignmentToAutomaticVariable', 'Profile',
+  Justification='-Profile is the intended public parameter name (mirrors radFormatter''s -profile flag); this standalone script never reads the automatic $PROFILE.')]
 param(
     [Parameter(ParameterSetName = 'Version', Mandatory)]
     [switch]$Version,
@@ -72,6 +74,10 @@ param(
 
     [Parameter(ParameterSetName = 'Format')]
     [string]$EngineConfigFile,
+
+    [Parameter(ParameterSetName = 'Format')]
+    [ValidateSet('Default', 'FormatterExe', 'Embarcadero', 'NoOp')]
+    [string]$Profile,
 
     [Parameter(ParameterSetName = 'Format')]
     [string]$RootPath,
@@ -126,7 +132,7 @@ $ExitDirty          = 1   # -Check found files needing formatting
 $ExitPartialFailure = 2   # some files failed to format
 $ExitFatal          = 3   # engine not found, bad root, unhandled error
 
-$script:ToolVersion = '0.6.3'
+$script:ToolVersion = '0.6.4'
 
 # =============================================================================
 # Version info
@@ -505,6 +511,7 @@ function Invoke-FormatEngine {
         [string]$EngineName,
         [string[]]$SourceFiles,
         [string]$FormatEngineConfigFile,
+        [string]$EngineProfile,
         [bool]$BackupsEnabled,
         [string]$FileEncoding,
         [bool]$CheckOnly,
@@ -521,10 +528,15 @@ function Invoke-FormatEngine {
     if ($EngineName -eq 'formatter') {
         $engineArgs.Add('-delphi')
         # formatter.exe has no check mode -- when $CheckOnly is true
-        # the caller uses Invoke-FormatterCheck instead of this function
+        # the caller uses Invoke-FormatterCheck instead of this function.
+        # -profile is radFormatter-only and is never passed to formatter.exe.
     }
-    if ($EngineName -eq 'radFormatter' -and $CheckOnly) {
-        $engineArgs.Add('-check')
+    if ($EngineName -eq 'radFormatter') {
+        if ($CheckOnly) { $engineArgs.Add('-check') }
+        if (-not [string]::IsNullOrEmpty($EngineProfile)) {
+            $engineArgs.Add('-profile')
+            $engineArgs.Add($EngineProfile)
+        }
     }
 
     if (-not [string]::IsNullOrEmpty($FormatEngineConfigFile)) {
@@ -655,6 +667,7 @@ function Get-DirtyResult {
         [string]$EngineName,
         [string[]]$SourceFiles,
         [string]$FormatEngineConfigFile,
+        [string]$EngineProfile,
         [string]$FileEncoding,
         [int]$Timeout
     )
@@ -662,6 +675,7 @@ function Get-DirtyResult {
     if ($EngineName -eq 'radFormatter') {
         $r = Invoke-FormatEngine -EngineBinary $EngineBinary -EngineName $EngineName `
             -SourceFiles $SourceFiles -FormatEngineConfigFile $FormatEngineConfigFile `
+            -EngineProfile $EngineProfile `
             -BackupsEnabled $false -FileEncoding $FileEncoding -CheckOnly $true -Timeout $Timeout
 
         # Exit 0 = clean, 1 = dirty. Anything else (or -1 timeout) is a real error.
@@ -823,6 +837,9 @@ try {
     if ($PSBoundParameters.ContainsKey('EngineConfigFile')) {
         $effectiveConfig | Add-Member -MemberType NoteProperty -Name 'engineConfigFile' -Value $EngineConfigFile -Force
     }
+    if ($PSBoundParameters.ContainsKey('Profile')) {
+        $effectiveConfig | Add-Member -MemberType NoteProperty -Name 'profile' -Value $Profile -Force
+    }
     if ($PSBoundParameters.ContainsKey('Encoding')) {
         $effectiveConfig | Add-Member -MemberType NoteProperty -Name 'encoding' -Value $Encoding -Force
     }
@@ -854,6 +871,7 @@ try {
     # Resolve effective values from config (CLI overrides already applied)
     $resolvedEngine         = (Get-ConfigValue $effectiveConfig 'engine')          ; if ($null -eq $resolvedEngine)         { $resolvedEngine = $Engine }
     $resolvedEngineConfig   = (Get-ConfigValue $effectiveConfig 'engineConfigFile') ; if ($null -eq $resolvedEngineConfig)   { $resolvedEngineConfig = '' }
+    $resolvedProfile        = (Get-ConfigValue $effectiveConfig 'profile')          ; if ($null -eq $resolvedProfile)        { $resolvedProfile = '' }
     $resolvedEncoding       = (Get-ConfigValue $effectiveConfig 'encoding')         ; if ($null -eq $resolvedEncoding)       { $resolvedEncoding = '' }
     $resolvedBackups        = (Get-ConfigValue $effectiveConfig 'createBackups')    ; if ($null -eq $resolvedBackups)        { $resolvedBackups = $false }
     $resolvedTimeout        = (Get-ConfigValue $effectiveConfig 'timeoutSeconds')   ; if ($null -eq $resolvedTimeout)        { $resolvedTimeout = $TimeoutSeconds }
@@ -907,6 +925,7 @@ try {
     if ($Check -or $WhatIfPreference) {
         $dirtyResult = Get-DirtyResult -EngineBinary $engineBinary -EngineName $resolvedEngine `
             -SourceFiles $filesToFormat -FormatEngineConfigFile $resolvedEngineConfig `
+            -EngineProfile $resolvedProfile `
             -FileEncoding $resolvedEncoding -Timeout $resolvedTimeout
 
         $sw.Stop()
@@ -965,6 +984,7 @@ try {
 
     $runResult = Invoke-FormatEngine -EngineBinary $engineBinary -EngineName $resolvedEngine `
         -SourceFiles $filesToFormat -FormatEngineConfigFile $resolvedEngineConfig `
+        -EngineProfile $resolvedProfile `
         -BackupsEnabled $resolvedBackups -FileEncoding $resolvedEncoding `
         -CheckOnly $false -Timeout $resolvedTimeout
 

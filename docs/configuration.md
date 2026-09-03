@@ -27,6 +27,7 @@ All keys are optional. Unrecognized keys are ignored.
 {
   "engine": "formatter",
   "engineConfigFile": "",
+  "profile": "",
   "encoding": "",
   "createBackups": false,
   "outputLevel": "detailed",
@@ -43,6 +44,7 @@ All keys are optional. Unrecognized keys are ignored.
 |-----|------|-------------|
 | `engine` | string | Formatting engine: `formatter` or `radFormatter` |
 | `engineConfigFile` | string | Path to engine-specific formatting rules config |
+| `profile` | string | radFormatter base config profile: `Default`, `FormatterExe`, `Embarcadero`, `NoOp`. radFormatter only -- ignored (never passed) when `engine` is `formatter` |
 | `encoding` | string | File encoding passed to engine via `-e` |
 | `createBackups` | bool | Create `.bak` files before formatting |
 | `outputLevel` | string | Output verbosity: `detailed`, `summary`, `quiet` |
@@ -87,6 +89,22 @@ This is distinct from the orchestration config. Example:
   "engineConfigFile": "radFormatter.json"
 }
 ```
+
+## radFormatter Profile
+
+The `profile` key (or `-Profile` CLI parameter) selects radFormatter's base
+config profile, applied via its `-profile` flag:
+
+- `Default` -- radFormatter's own default rules
+- `FormatterExe` -- emulates Embarcadero `formatter.exe` behavior
+- `Embarcadero` -- Embarcadero style conventions
+- `NoOp` -- no formatting (useful for testing)
+
+This is distinct from `engineConfigFile`: `profile` picks a built-in baseline,
+while `engineConfigFile` points to a full rules file (which can be generated
+with `radFormatter -writeDefaultConfig <file>`). The `profile` key is
+radFormatter-only -- it is never passed to `formatter.exe`, and setting it while
+`engine` is `formatter` is ignored (the run is not affected).
 
 ## `-ShowConfig`
 

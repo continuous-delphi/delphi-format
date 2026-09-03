@@ -113,4 +113,35 @@ Describe 'delphi-format.ps1 engine discovery and dispatch' {
             $a | Should -Not -Match '(?m)^-delphi$'
         }
     }
+
+    Context 'profile forwarding' {
+
+        It 'forwards -Profile to radFormatter as -profile <name> on a format run' {
+            $ws = New-Workspace
+            $a = Get-EngineArgs -Params @{
+                RootPath = $ws; EnginePath = $script:MockEngine; Engine = 'radFormatter'; Profile = 'Embarcadero'
+            }
+            $a | Should -Match '(?m)^-profile$'
+            $a | Should -Match '(?m)^Embarcadero$'
+        }
+
+        It 'forwards the profile in radFormatter check mode too' {
+            $ws = New-Workspace
+            $a = Get-EngineArgs -Params @{
+                RootPath = $ws; EnginePath = $script:MockEngine; Engine = 'radFormatter'; Check = $true; Profile = 'FormatterExe'
+            }
+            $a | Should -Match '(?m)^-check$'
+            $a | Should -Match '(?m)^-profile$'
+            $a | Should -Match '(?m)^FormatterExe$'
+        }
+
+        It 'never passes -profile to formatter.exe and does not error' {
+            $ws = New-Workspace
+            $a = Get-EngineArgs -Params @{
+                RootPath = $ws; EnginePath = $script:MockEngine; Engine = 'formatter'; Profile = 'Embarcadero'
+            }
+            $LASTEXITCODE | Should -Be 0
+            $a | Should -Not -Match '(?m)^-profile$'
+        }
+    }
 }
