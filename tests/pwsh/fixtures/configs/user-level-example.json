@@ -1,0 +1,7 @@
+{
+  "engine": "formatter",
+  "outputLevel": "detailed",
+  "includeFilePattern": ["*.lpr"],
+  "excludeDirectoryPattern": ["thirdparty*"],
+  "timeoutSeconds": 300
+}

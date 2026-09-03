@@ -8,6 +8,19 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## v0.6.2
+- Add the Config, Engine, and Integration Pester suites plus a `tests/pwsh/fixtures/`
+  mock engine (formatter/radFormatter simulation), config fixtures, and sample
+  `.pas` files. Covers the config hierarchy/merge rules, engine discovery and
+  dispatch, and end-to-end Execute/Check/WhatIf/output modes (57 tests pass).
+[#2](https://github.com/continuous-delphi/delphi-format/issues/2)
+- Fix `Merge-FormatConfig` silently dropping earlier array values when the
+  accumulated array held a single element (single-element arrays unrolled to a
+  scalar on return, defeating the append/dedupe path).
+[#5](https://github.com/continuous-delphi/delphi-format/issues/5)
+
+---
+
 ## v0.6.0
 - Implement structured output: `-Json` and `-PassThru` now emit a result
   object (per-file status, counts, timing) across Execute/Check/WhatIf, and

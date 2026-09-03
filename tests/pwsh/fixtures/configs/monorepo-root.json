@@ -1,0 +1,4 @@
+{
+  "searchParentFolders": false,
+  "excludeDirectoryPattern": ["packages*"]
+}

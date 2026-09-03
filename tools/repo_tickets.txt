@@ -53,3 +53,188 @@ Acceptance criteria:
 - [ ] Pester coverage for `-Json`, `-OutputFile`, and `-PassThru` across modes.
 
 ---
+Title: Complete the test suite -- Config, Engine, Integration tests + fixtures + mock engine
+Issue: #2
+Status: closed
+Labels: testing
+Body:
+The shipped test suite is incomplete relative to the original plan
+(`delphi-format.md` lines 649-673) and `plan-complete-script.md` Step 7. The
+repo currently ships only:
+
+- `tests/pwsh/delphi-format.Version.Tests.ps1`
+- `tests/pwsh/delphi-format.Output.Tests.ps1`
+- `tests/pwsh/Invoke-ScriptAnalyzer.Tests.ps1`
+
+Missing entirely: a `tests/pwsh/fixtures/` directory, a mock engine, and the
+Config / Engine / Integration test files that exercise the bulk of the tool's
+orchestration logic (config hierarchy, engine discovery/dispatch, end-to-end
+formatting across all modes). This is the largest outstanding gap in the tool.
+
+Follow delphi-clean's patterns: temp workspace isolation per test,
+`$env:DELPHI_FORMAT_HOME_OVERRIDE` to redirect the `$HOME` config lookup, and a
+mock engine binary so tests validate orchestration, not the real formatter.
+
+Implementation notes:
+- `fixtures/` directory:
+  - `project-example.json`, `user-level-example.json`, `monorepo-root.json`
+    (stop-marker config for parent-traversal tests).
+  - Sample `.pas` files: one already-formatted, one needing formatting.
+  - A fixture path containing a space in a directory name (locks in the
+    `ConvertTo-ArgumentString` quoting behavior).
+  - A mock engine script (`.ps1`/`.cmd`) simulating formatter/radFormatter:
+    correct exit codes, radFormatter `would format: <path>` stdout lines, and an
+    actual in-place file rewrite so hash-before/after change detection is
+    exercised.
+- `delphi-format.Config.Tests.ps1` -- config hierarchy, merge rules (scalar
+  last-writer-wins, array append + case-insensitive dedupe), `-ShowConfig`,
+  `-ConfigFile`, parent traversal, `searchParentFolders` stop marker.
+- `delphi-format.Engine.Tests.ps1` -- `Find-Formatter` / `Find-RadFormatter`
+  three-step resolution (explicit path -> PATH lookup -> auto-discovery ->
+  `$null`), engine-specific argument building, dispatch by engine name,
+  `$null` engine -> exit 3.
+- `delphi-format.Integration.Tests.ps1` -- end-to-end via the mock engine:
+  Execute, `-Check` (exit 1 on dirty), `-WhatIf`, `-Json` (field-by-field),
+  `-PassThru`, `-OutputFile`, `-OutputLevel`, path-with-spaces, and exit codes
+  for every mode.
+
+Acceptance criteria:
+- [ ] `tests/pwsh/fixtures/` exists with the config fixtures, sample `.pas`
+      files, a space-in-path fixture, and a mock engine.
+- [ ] `delphi-format.Config.Tests.ps1` covers the full config hierarchy and
+      merge rules.
+- [ ] `delphi-format.Engine.Tests.ps1` covers discovery, dispatch, and the
+      engine-not-found (exit 3) path.
+- [ ] `delphi-format.Integration.Tests.ps1` covers Execute / Check / WhatIf /
+      Json / PassThru / OutputFile / OutputLevel / path-with-spaces and asserts
+      the exit code for each mode.
+- [ ] `pwsh tests/run-tests.ps1` runs all files green.
+- [ ] PSScriptAnalyzer stays at zero errors / zero warnings.
+
+---
+Title: Validate engine-specific config keys against the selected engine
+Issue: #3
+Labels: enhancement
+Body:
+The original plan (`delphi-format.md` lines 485-487) calls for runtime
+validation of engine-specific config keys: "if a key only applies to one
+engine, emit a warning or error when used with the wrong engine." This is
+currently unimplemented -- keys meant for one engine are silently ignored when
+another engine is selected, which hides configuration mistakes.
+
+The most concrete case is radFormatter-only keys (e.g. the `profile` key added
+by the "expose -Profile" ticket) being present while `engine` resolves to
+`formatter`. Today that produces no diagnostic; the key is simply dropped.
+
+Implementation notes:
+- After the effective config is resolved and the effective engine is known,
+  check for keys that do not apply to that engine.
+- Maintain a small map of engine -> set of keys that are exclusive to it (and
+  the shared keys that apply to both). At minimum, radFormatter-exclusive:
+  `profile` (once added). formatter.exe has no exclusive orchestration keys
+  today, but the mechanism should be table-driven so new keys slot in.
+- Decide and document the severity: recommend a non-fatal `Write-Warning`
+  (e.g. "Config key 'profile' applies only to the 'radFormatter' engine and is
+  ignored for engine 'formatter'.") rather than a hard failure, so a shared
+  config that targets multiple engines across repos does not break. Confirm the
+  warning is suppressed under `-Json` (routed so it never corrupts JSON stdout).
+- Ensure the validation runs after CLI overrides are applied, so it reflects the
+  truly effective engine, not just the config-file engine.
+
+Acceptance criteria:
+- [ ] A radFormatter-only key present with `engine = formatter` produces a clear
+      warning naming the key and the engine, and the run still proceeds.
+- [ ] The check is table-driven so additional engine-exclusive keys are easy to
+      register.
+- [ ] The warning does not appear on stdout when `-Json` is set (no JSON
+      corruption).
+- [ ] `docs/configuration.md` documents which keys are engine-specific and the
+      warning behavior.
+- [ ] Pester coverage for the wrong-engine-key warning path.
+
+---
+Title: Expose radFormatter -profile as a first-class parameter and config key
+Issue: #4
+Labels: enhancement
+Body:
+radFormatter supports a `-profile <name>` flag selecting a base config profile
+(`Default`, `FormatterExe`, `Embarcadero`, `NoOp`) -- see `delphi-format.md`
+lines 748-752 / 808. delphi-format does not currently expose it, so users cannot
+select a radFormatter base profile through this tool.
+
+Add a `-Profile` parameter and a matching `profile` orchestration config key,
+and pass the value through to radFormatter via `-profile` in
+`Invoke-FormatEngine`.
+
+Explicitly OUT OF SCOPE (do not add): radFormatter's `-writeDefaultConfig` and
+`-trace`. `-writeDefaultConfig` is a config-bootstrapping/emit-and-exit mode
+that does not fit this tool's format/check orchestration surface, and `-trace`
+is a debugging aid. This ticket covers `-profile` only.
+
+Implementation notes:
+- Add a `Profile` parameter to the Format parameter set. Use
+  `[ValidateSet('Default','FormatterExe','Embarcadero','NoOp')]`.
+- Add `profile` to the supported config keys and the CLI-override pass in the
+  main block (CLI wins over config, same pattern as `engine` / `encoding`).
+- In `Invoke-FormatEngine`, when `$EngineName -eq 'radFormatter'` and a profile
+  is set, add `-profile <value>` to the engine argument list. Also apply it in
+  `Invoke-FormatEngine`'s radFormatter check path so `-Check` respects the
+  profile.
+- `profile` is radFormatter-only. Coordinate with the "engine-specific config
+  validation" ticket: selecting `-Profile` with `engine = formatter` should
+  warn (or, if that ticket is not yet done, at least be ignored cleanly for
+  formatter.exe, never passed to it).
+- Update `docs/configuration.md` (new key) and README (new flag), and note the
+  profile in `-ShowConfig` output.
+
+Acceptance criteria:
+- [ ] `-Profile <name>` and the `profile` config key are accepted and resolved
+      through the normal config/CLI precedence.
+- [ ] With `engine = radFormatter`, the resolved profile is passed as
+      `-profile <name>` in both format and check invocations.
+- [ ] `-Profile` is never passed to formatter.exe; using it with
+      `engine = formatter` does not error the run.
+- [ ] `-writeDefaultConfig` and `-trace` are NOT added.
+- [ ] `docs/configuration.md` and `README.md` document the new parameter/key.
+- [ ] Pester coverage: profile forwarded to radFormatter, and not to formatter.
+
+---
+Title: Fix Merge-FormatConfig dropping earlier array values when accumulated array has one element
+Issue: #5
+Status: closed
+Labels: bug
+Body:
+`Merge-FormatConfig` (`source/delphi-format.ps1`) read the accumulated array
+from the in-progress merged object via `Get-ConfigValue $merged $key` and gated
+the append/dedupe branch on `$existing -is [System.Array]`. PowerShell unrolls a
+single-element array to a scalar when it is returned from a function, so when the
+accumulated `excludeDirectoryPattern` / `includeFilePattern` had exactly ONE
+element, `Get-ConfigValue` returned that lone element as a string. The
+`-is [System.Array]` check then failed and the else branch OVERWROTE the property
+with the incoming layer's array, silently discarding the earlier value.
+
+Impact: any config layering where an array key held a single value at the point a
+higher-priority layer contributed to the same key lost the earlier entry --
+contrary to the documented "arrays append + deduplicate across all sources"
+behavior (`docs/configuration.md`). Concretely, a `$HOME` config excluding a
+single directory plus a project config excluding a different single directory
+resolved to only the project's value. Discovered while building the Config test
+suite (#2); the searchParentFolders traversal tests reproduced it directly.
+
+Fix (already applied alongside #2): read the existing value directly from the
+merged object's property (`$merged.PSObject.Properties[$key]`) and normalize with
+`@(...)` so the array type is preserved without unrolling; append + dedupe when
+the property already exists, otherwise store the incoming array. The `.Count`
+guard was dropped (an empty existing array simply appends nothing) to stay
+compatible with `Set-StrictMode -Version Latest`, under which `.Count` on a
+non-collection throws.
+
+Acceptance criteria:
+- [x] Merging two layers that each contribute a single distinct value to the same
+      array key yields both values (append), not just the higher-priority one.
+- [x] Case-insensitive de-duplication still holds across layers.
+- [x] Behavior verified by the searchParentFolders traversal tests in
+      `delphi-format.Config.Tests.ps1`.
+- [x] `source/delphi-format.ps1` stays PSScriptAnalyzer-clean and PS 5.1 / strict-mode safe.
+
+---

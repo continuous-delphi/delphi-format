@@ -1,0 +1,7 @@
+{
+  "engine": "radFormatter",
+  "outputLevel": "summary",
+  "includeFilePattern": ["*.pp"],
+  "excludeDirectoryPattern": ["vendor*"],
+  "timeoutSeconds": 120
+}

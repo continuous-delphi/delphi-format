@@ -126,7 +126,7 @@ $ExitDirty          = 1   # -Check found files needing formatting
 $ExitPartialFailure = 2   # some files failed to format
 $ExitFatal          = 3   # engine not found, bad root, unhandled error
 
-$script:ToolVersion = '0.6.1'
+$script:ToolVersion = '0.6.3'
 
 # =============================================================================
 # Version info
@@ -265,9 +265,16 @@ function Merge-FormatConfig([object]$Base, [object]$Layer) {
         $value = $prop.Value
 
         if ($value -is [System.Array]) {
-            # Arrays: append + deduplicate
-            $existing = Get-ConfigValue $merged $key
-            if ($null -ne $existing -and $existing -is [System.Array]) {
+            # Arrays: append + deduplicate.
+            # Read the existing value directly from the property rather than via
+            # Get-ConfigValue: returning a single-element array from a function
+            # unrolls it to a scalar, which would make the -is [System.Array]
+            # check below fail and silently overwrite (dropping earlier values)
+            # whenever the accumulated array had exactly one element. @()
+            # normalizes without unrolling.
+            $existingProp = $merged.PSObject.Properties[$key]
+            if ($null -ne $existingProp) {
+                $existing = @($existingProp.Value)
                 $combined = [System.Collections.Generic.List[string]]::new()
                 $seen     = [System.Collections.Generic.HashSet[string]]::new(
                     [StringComparer]::OrdinalIgnoreCase)
